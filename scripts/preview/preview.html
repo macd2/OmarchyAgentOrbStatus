@@ -1,0 +1,159 @@
+<!doctype html>
+<!--
+  Source of preview.png. The sprite is drawn by the widget's own paint routine
+  (copied from AgentPulse.qml), frozen at one phase, so every pixel is one the
+  widget really produces. Render with scripts/preview/render.sh.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@700&family=Space+Grotesk:wght@400;500&display=block" rel="stylesheet">
+<style>
+  html, body { margin: 0; width: 1600px; height: 900px; overflow: hidden; }
+  body {
+    background:
+      radial-gradient(ellipse 900px 620px at 800px 450px, #3a6db0 0%, #1f3a66 45%, #0d1626 80%, #05080f 100%);
+    font-family: "Space Grotesk", sans-serif;
+    position: relative;
+  }
+  #hero { position: absolute; image-rendering: pixelated; }
+  #bar  { position: absolute; left: 900px; top: 300px; }
+  .text { position: absolute; left: 900px; color: #eef2fb; }
+  h1 { margin: 0; font-family: "Pixelify Sans", sans-serif; font-size: 96px; font-weight: 700; letter-spacing: 1px; line-height: 1; }
+  .sub { font-size: 32px; font-weight: 400; color: #b9c6e4; line-height: 1.45; }
+  .agents { display: flex; align-items: center; gap: 10px; color: #eef2fb; }
+  .agents b { width: 50px; height: 50px; border-radius: 12px; flex: none; display: grid; place-items: center;
+              background: #121a2c; box-shadow: inset 0 0 0 1px #2c3b5c; }
+  .agents svg { width: 30px; height: 30px; display: block; }
+  .agents span { font-size: 22px; font-weight: 500; color: #8fa0c6; margin-left: 8px; white-space: nowrap; }
+  .meta { font-size: 21px; color: #6a7899; }
+  .meta i { font-style: normal; padding: 0 8px; }
+</style>
+</head>
+<body>
+<canvas id="hero"></canvas>
+<canvas id="bar" width="497" height="80"></canvas>
+<div class="text" style="top:462px"><h1>Agent Pulse</h1></div>
+<div class="text sub" style="top:582px">Agents at a glance: a pixel-art<br>orb that lives in your status bar.</div>
+<div class="text agents" id="agents" style="top:700px"></div>
+<div class="text meta" style="top:790px">Omarchy plugin<i>·</i>MIT</div>
+<img id="barsrc" src="bar.png" style="display:none">
+<script>
+const P = new URLSearchParams(location.search)
+// Hue anchors: the four theme colours the widget reads (accent, popups.border,
+// notifications.countdown, tooltip.border). Default: four Tokyo Night hues.
+const HUES = (P.get("hues") || "7aa2f7,bb9af7,7dcfff,9ece6a").split(",")
+  .map(h => [parseInt(h.slice(0,2),16)/255, parseInt(h.slice(2,4),16)/255, parseInt(h.slice(4,6),16)/255])
+const PHASE = Number(P.get("phase") || 3.6)
+const LEVEL = (P.get("level") || "0.3,0.45,0.35,0.25").split(",").map(Number)
+const MOTION = Number(P.get("motion") || 0)
+// Hero grid: the same paint routine on a larger canvas, as the widget would draw
+// it in a bigger slot. Odd, and divides the ~345px hero into whole pixels.
+const HERO_S = Number(P.get("heroS") || 47)
+const HERO_PX = 400
+const HERO_PHASE = Number(P.get("heroPhase") || 6.6)
+// Calmer bands than the bar frame: at this size the full bulge reads as a rock.
+const HERO_LEVEL = (P.get("heroLevel") || "0.1,0.3,0.25,0.05").split(",").map(Number)
+
+// ---- verbatim port of AgentPulse.qml onPaint ----------------------------
+const levels = 5, maxBands = 4
+const bayer = [0,8,2,10, 12,4,14,6, 3,11,1,9, 15,7,13,5]
+function h3(x,y,z){ const n=Math.sin(x*127.1+y*311.7+z*74.7)*43758.5453; return n-Math.floor(n) }
+function noise3(x,y,z){
+  const ix=Math.floor(x),iy=Math.floor(y),iz=Math.floor(z), fx=x-ix,fy=y-iy,fz=z-iz
+  const ux=fx*fx*(3-2*fx),uy=fy*fy*(3-2*fy),uz=fz*fz*(3-2*fz); let s=0
+  for(let dz=0;dz<2;dz++)for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++)
+    s+=h3(ix+dx,iy+dy,iz+dz)*(dx?ux:1-ux)*(dy?uy:1-uy)*(dz?uz:1-uz)
+  return s
+}
+function snoise(x,y,z){ return (noise3(x,y,z)*2-1)+(noise3(x*2.03,y*2.03,z*2.03)*2-1)*0.5 }
+function buckets(){
+  const out=[]
+  for(let s=0;s<levels;s++){ const t=s/(levels-1)
+    for(let h=0;h<4;h++){ const c=HUES[h]
+      out[s*4+h]="rgb("+Math.round(c[0]*255*t)+","+Math.round(c[1]*255*t)+","+Math.round(c[2]*255*t)+")" } }
+  return out
+}
+function paint(ctx, S, t, level, work, edgeW, pad, cap){
+  edgeW = edgeW || 0.13; pad = pad || 1.5; cap = cap || 1.16
+  ctx.clearRect(0,0,S,S)
+  const cxy=(S-1)/2+0.5, R=S*0.5-pad
+  let lx=0.35,ly=0.55,lz=2.0; const ll=Math.sqrt(lx*lx+ly*ly+lz*lz); lx/=ll;ly/=ll;lz/=ll
+  const bk=buckets(), paths={}
+  const spinA=t*(0.10+2.0*work), ca=Math.cos(spinA), sa=Math.sin(spinA)
+  const tipB=t*(0.07+1.2*work), cb2=Math.cos(tipB), sb2=Math.sin(tipB)
+  const sweepPos=-1.2+((t*(0.55+1.7*work))%2.4)
+  const push=(b,x,y)=>{ (paths[b]=paths[b]||[]).push(x,y) }
+  for(let y=0;y<S;y++)for(let x=0;x<S;x++){
+    const breathe=1+work*0.05*Math.sin(t*2.6)
+    const nx=(x+0.5-cxy)/(R*breathe), ny=(y+0.5-cxy)/(R*breathe)
+    const r2=nx*nx+ny*ny, r=Math.sqrt(r2)
+    if(r>cap) continue
+    const band=Math.max(0,Math.min(maxBands-1,Math.floor((ny+1)/2*maxBands))), lv=level[band]
+    const inv=r>0?1/r:0, dx=nx*inv, dy=ny*inv, dz=Math.sqrt(r2>1?0:1-r2)
+    const rx=dx*ca-dy*sa, ry=dx*sa+dy*ca, ry2=ry*cb2-dz*sb2, rz2=ry*sb2+dz*cb2
+    const amp=0.05+0.30*lv+0.018*Math.sin(t*1.1+band*2.1)
+    const d=snoise(rx*2.2,ry2*2.2,rz2*2.2+t*0.45)*amp
+    if(r>1+d){
+      if(!(r<1+d+edgeW&&r<cap)) continue
+      const eShade=Math.max(0,1-(r-1-d)/edgeW)*(0.20+0.60*lv)
+      push(Math.floor(Math.min(1,eShade)*(levels-1)+bayer[(y%4)*4+(x%4)]/16),x,y)
+      continue
+    }
+    const nz=dz, ndl=Math.max(0,nx*lx+ny*ly+nz*lz), fres=Math.pow(1-nz,3)*0.55
+    let lit=0.22+0.78*ndl+fres
+    lit*=0.70+0.80*lv+0.06*Math.sin(t*0.9+band)
+    lit+=work*0.5*Math.exp(-Math.pow((ny-sweepPos)/0.35,2))
+    const q=Math.floor(lit*(levels-1)+bayer[(y%4)*4+(x%4)]/16)
+    const hue=Math.floor(((Math.atan2(ny,nx)+Math.PI)/(2*Math.PI))*4)%4
+    push(Math.max(0,Math.min(levels-1,q))*4+hue,x,y)
+  }
+  for(const k in paths){ const pts=paths[k], b=Number(k)
+    ctx.fillStyle=bk[b>=0&&b<bk.length?b:0]; ctx.beginPath()
+    for(let j=0;j<pts.length;j+=2) ctx.rect(pts[j],pts[j+1],1,1); ctx.fill() }
+}
+// --------------------------------------------------------------------------
+
+const S = 23   // 26px bar - 3, odd
+const src = document.createElement("canvas"); src.width = src.height = S
+paint(src.getContext("2d"), S, PHASE, LEVEL, MOTION)
+
+// Two widget-only constraints do not survive the bigger grid: the 1.5px margin
+// and the 1.16 radius cap clip the bulges flat, and an outline 0.13 of the radius
+// turns into a 3px black rim. Both are scaled back to their 23px proportions.
+const HERO_PAD = HERO_S * 0.12
+const HERO_EDGE = 0.13 * (S * 0.5 - 1.5) / (HERO_S * 0.5 - HERO_PAD) * 1.3
+const big = document.createElement("canvas"); big.width = big.height = HERO_S
+paint(big.getContext("2d"), HERO_S, HERO_PHASE, HERO_LEVEL, MOTION, HERO_EDGE, HERO_PAD, 1.3)
+const k = Math.round(HERO_PX / HERO_S), side = HERO_S * k
+const hero = document.getElementById("hero")
+hero.width = hero.height = side
+hero.style.left = (460 - side / 2) + "px"
+hero.style.top = (450 - side / 2) + "px"
+const hc = hero.getContext("2d"); hc.imageSmoothingEnabled = false
+hc.drawImage(big, 0, 0, side, side)
+
+// Bar strip: the real captured bar, with its sprite replaced by this frame.
+const img = document.getElementById("barsrc")
+function drawBar() {
+  const bc = document.getElementById("bar").getContext("2d")
+  bc.drawImage(img, 0, 0)
+  bc.fillStyle = "#1a1b26"; bc.fillRect(88, 12, 56, 56)
+  bc.imageSmoothingEnabled = false
+  bc.drawImage(src, 92, 17, S * 2, S * 2)
+}
+if (img.complete) drawBar(); else img.onload = drawBar
+
+// Agent marks: the watcher detects 23 agents; these are the ones LobeHub has a
+// mark for, most used first. The rest are counted, not drawn.
+// Brand colour where LobeHub has a colour mark, white otherwise.
+const MARKS = ["claudecode-color", "codex-color", "opencode", "geminicli-color", "hermesagent",
+               "githubcopilot", "cursor", "qwen-color", "kimi-color"]
+const WATCHED = 23
+Promise.all(MARKS.map(n => fetch("logos/" + n + ".svg").then(r => r.text()))).then(svgs => {
+  document.getElementById("agents").innerHTML =
+    svgs.map(v => "<b>" + v + "</b>").join("") + "<span>+" + (WATCHED - MARKS.length) + " more</span>"
+})
+</script>
+</body>
+</html>

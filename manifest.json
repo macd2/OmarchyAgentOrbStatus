@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.macd2.agent-pulse",
+  "name": "Agent Pulse",
+  "version": "1.0.0",
+  "author": "macd2",
+  "license": "MIT",
+  "description": "Pixel-art orb for the Omarchy status bar: a 23px iridescent sphere that splits into one band per active coding agent (opencode, codex, claude, hermes, pi and more) and only moves while work is actually happening.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "AgentPulse.qml"
+  },
+  "barWidget": {
+    "displayName": "Agent Pulse",
+    "description": "Pixel-art orb showing per-agent coding activity",
+    "category": "Developer",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
